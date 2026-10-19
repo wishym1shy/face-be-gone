@@ -192,7 +192,7 @@ Where the time goes: YOLO inference dominates, then decode/encode. Batching fram
 
 There's no `requirements.txt` or `pyproject.toml` yet; install steps live in `docs/tutorial.md`. Imports for optional backends are lazy, so `haar` runs with only OpenCV and numpy.
 
-**Dependency licensing.** The script is CC BY-NC 4.0, but it imports `ultralytics`, which is **AGPL-3.0**. Running it locally is fine. Distributing a bundled app or installer that includes Ultralytics (GUI packaging, #10/#11) brings AGPL obligations, and the face weights are fine-tuned from Ultralytics base models. The ONNX Runtime path (#11) could avoid shipping Ultralytics, but check the license of the weights themselves before distributing them. Get proper advice before any packaged release.
+**Dependency licensing.** face-be-gone's own code is MIT. It imports `ultralytics`, which is **AGPL-3.0**. Running the script and using its output is unaffected. A distributed bundle that includes Ultralytics (installer, packaged GUI, Docker image), or a modified version run as a network service, must meet the AGPL's terms for that bundle: the corresponding source is available, which a public repo already covers. MIT code can be combined with AGPL code, so nothing here blocks the roadmap. The ONNX Runtime path (#11) would remove the Ultralytics dependency entirely if a fully permissive bundle is ever wanted; check the face weights' own license before distributing them.
 
 ## 7. Known limitations
 
@@ -291,4 +291,4 @@ Rules:
 | Multi-scale / tiled detection reverted | Merging detections from several scales degraded edge coverage on real footage. Revisit only behind the benchmark. |
 | Python 3.12 | Reliable CUDA PyTorch wheels; 3.14 silently fell back to CPU. |
 | Install command taken from pytorch.org, never hardcoded | A hardcoded `cu124` index went stale and silently installed CPU builds. |
-| CC BY-NC 4.0 | Owner's choice: free for non-commercial use, with attribution. See the licensing note in §6. |
+| MIT license (replaced CC BY-NC 4.0) | The goal is to share the tool with anyone, commercial use included. CC licenses aren't designed for software, and the non-commercial clause conflicted with AGPL dependencies for packaged releases. |
