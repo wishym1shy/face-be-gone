@@ -10,6 +10,7 @@ A GPU-accelerated command-line tool that detects and blurs faces in video. Detec
 - `docs/tutorial.md`: end-user setup and usage guide.
 - `README.md`: short overview and quick start.
 - `LICENSE`: MIT. Dependencies keep their own licenses; `ultralytics` is AGPL-3.0, which matters for anything bundled or hosted (see README).
+- `ARCHITECTURE.md`: how the pipeline works, known limitations, target architecture and decision log. Read it before changing detection, tracking, rendering or output code, and update it in the same PR when you change how any of those work.
 
 ## Workflow: always use pull requests
 
