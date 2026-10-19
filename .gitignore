@@ -1,0 +1,5 @@
+*.pt
+*.tflite
+*.mp4
+*.mov
+__pycache__/
