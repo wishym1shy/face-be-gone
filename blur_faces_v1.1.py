@@ -6,14 +6,10 @@ blur_faces_v1.1.py
   Script by:      wishym1shy (GitHub)
   Coded with:     Claude Code
   Version:        1.1
-  License:        CC BY-NC 4.0 (Attribution-NonCommercial 4.0 International)
-                  https://creativecommons.org/licenses/by-nc/4.0/
-
-                  You are free to share and adapt this script for any
-                  non-commercial purpose, provided you give appropriate
-                  credit to wishym1shy and indicate if changes were
-                  made. Commercial use is not permitted under this license
-                  without separate written permission from the author.
+  License:        MIT (see LICENSE). Free to use, modify and share,
+                  commercially or not; keep the copyright notice.
+                  Dependencies keep their own licenses: ultralytics is
+                  AGPL-3.0 (see README, "Third-party licenses").
 ================================================================================
 
 Automatic per-frame face blurring for video, using YOLOv8-Face (GPU-accelerated)

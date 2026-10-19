@@ -26,5 +26,13 @@ Use **Python 3.12** and a **CUDA build of PyTorch**. Newer Pythons may not get G
 
 ## License
 
-[CC BY-NC 4.0](LICENSE) — attribution required, non-commercial use only.
+[MIT](LICENSE). Use it, change it, ship it, commercially or not; just keep the copyright notice.
 Script by wishym1shy, coded with Claude Code.
+
+### Third-party licenses
+
+face-be-gone's own code is MIT, but its dependencies keep their own licenses. Most are permissive. The exception is [Ultralytics](https://github.com/ultralytics/ultralytics) (used by the default YOLO backend), which is **AGPL-3.0**:
+
+- Running the script, and using the videos it produces, is unaffected, including for paid work.
+- If you distribute a bundle that includes Ultralytics (an installer, an app, a Docker image), or run a modified version as a network service, the AGPL's terms apply to that bundle. Ultralytics also sells a commercial license.
+- The MediaPipe and Haar backends don't use Ultralytics.

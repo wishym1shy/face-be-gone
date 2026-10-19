@@ -9,7 +9,7 @@ A GPU-accelerated command-line tool that detects and blurs faces in video. Detec
 - `blur_faces_v1.1.py`: the script (single file; the version is in the filename).
 - `docs/tutorial.md`: end-user setup and usage guide.
 - `README.md`: short overview and quick start.
-- `LICENSE`: CC BY-NC 4.0 (attribution required, non-commercial only).
+- `LICENSE`: MIT. Dependencies keep their own licenses; `ultralytics` is AGPL-3.0, which matters for anything bundled or hosted (see README).
 
 ## Workflow: always use pull requests
 
