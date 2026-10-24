@@ -17,6 +17,14 @@ SCRIPT = REPO / "facebegone.py"
 STUB_RUNNER = Path(__file__).resolve().parent / "stub_run.py"
 
 
+def haar_available():
+    """False on OpenCV 5, which no longer ships the Haar face model."""
+    import cv2
+    data_dir = getattr(getattr(cv2, "data", None), "haarcascades", "")
+    return hasattr(cv2, "CascadeClassifier") and os.path.exists(
+        os.path.join(data_dir, "haarcascade_frontalface_alt2.xml"))
+
+
 def load_script():
     """Import the script as a module, for unit-testing its functions."""
     spec = importlib.util.spec_from_file_location("face_be_gone_script", SCRIPT)

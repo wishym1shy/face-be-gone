@@ -47,10 +47,11 @@ Use Python 3.12 specifically. Do not install 3.14 or newer — as of writing thi
 
 This installs the AI/computer-vision libraries the script depends on, including PyTorch with GPU (CUDA) support.
 
-- Run:
+- Run (keep the quotes; without them PowerShell treats `<` as a redirect):
   ```powershell
-  python -m pip install ultralytics mediapipe opencv-python
+  python -m pip install ultralytics mediapipe "opencv-python<5" "opencv-contrib-python<5"
   ```
+  The `<5` pins keep OpenCV on 4.x, the version the script is tested on. OpenCV 5 dropped the Haar face model, so `--backend haar` stops working on it. Both packages are pinned because MediaPipe installs `opencv-contrib-python` alongside `opencv-python`.
 - **Separately**, install the GPU-enabled version of PyTorch. ⚠ **Don't hardcode a CUDA index tag from an old doc (including this one) without checking first** — PyTorch periodically retires older CUDA index versions (e.g. `cu124` was supported when this was first written, then later dropped in favor of newer tags), and pip does NOT error loudly when a tag no longer matches — it can silently fall back to installing a CPU-only build instead. Before running the install command:
   1. Visit https://pytorch.org/get-started/locally/
   2. Under "Your OS" pick Windows, "Package" pick Pip, "Language" pick Python, and for "Compute Platform" pick the newest CUDA version offered (not CPU).

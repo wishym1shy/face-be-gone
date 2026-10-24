@@ -222,8 +222,22 @@ def make_detector(confidence, backend="yolo", model_variant="full", yolo_size="m
         than either of the above.
     """
     if backend == "haar":
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml"
-        return ("haar", cv2.CascadeClassifier(cascade_path))
+        # OpenCV 5 dropped the Haar face model: opencv-python 5 has no
+        # CascadeClassifier at all, and opencv-contrib-python 5 has the class
+        # but not the model file, so it would build an empty detector that
+        # crashes on the first frame. Catch both before any work starts.
+        data_dir = getattr(getattr(cv2, "data", None), "haarcascades", "")
+        cascade_path = os.path.join(data_dir, "haarcascade_frontalface_alt2.xml")
+        if not hasattr(cv2, "CascadeClassifier") or not os.path.exists(cascade_path):
+            raise FaceBeGoneError(
+                f"--backend haar needs OpenCV 4.x, but OpenCV {cv2.__version__} is installed "
+                "(OpenCV 5 no longer includes the Haar face model).\n"
+                'Install 4.x with: python -m pip install "opencv-python<5" "opencv-contrib-python<5"\n'
+                "or use --backend yolo or --backend mediapipe.")
+        classifier = cv2.CascadeClassifier(cascade_path)
+        if classifier.empty():
+            raise FaceBeGoneError(f"could not load the Haar face model from {cascade_path}")
+        return ("haar", classifier)
 
     if backend == "yolo":
         from ultralytics import YOLO

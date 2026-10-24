@@ -13,7 +13,7 @@ import pytest
 
 from helpers import (
     audio_streams, beep_times, env_without_ffmpeg, flash_times, frame_count,
-    opencv_read_info, probe, psnr, rotation, run_script, video_stream,
+    haar_available, opencv_read_info, probe, psnr, rotation, run_script, video_stream,
 )
 
 
@@ -40,6 +40,7 @@ def test_version():
     assert re.fullmatch(r"face-be-gone \d+\.\d+\.\d+", result.stdout.strip())
 
 
+@pytest.mark.skipif(not haar_available(), reason="OpenCV 5 has no Haar face model")
 def test_haar_end_to_end(clip, tmp_path):
     """The real Haar detector, through the whole pipeline."""
     out = tmp_path / "out.mp4"
@@ -48,6 +49,14 @@ def test_haar_end_to_end(clip, tmp_path):
     assert (dst["width"], dst["height"]) == (src["width"], src["height"])
     assert frame_count(out) == frame_count(clip), f"source: {opencv_read_info(clip)}"
     assert len(audio_streams(out)) == 1
+
+
+@pytest.mark.skipif(haar_available(), reason="only on OpenCV 5")
+def test_haar_on_opencv5_is_a_clear_error(clip, tmp_path):
+    out = tmp_path / "out.mp4"
+    result = failed(run_script(clip, out, "--backend", "haar"))
+    assert "opencv-python<5" in result.stderr
+    assert not out.exists()
 
 
 def test_blur_lands_in_the_detected_box(clip, tmp_path):

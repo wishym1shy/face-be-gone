@@ -9,6 +9,7 @@ All notable changes to face-be-gone are listed here, newest first. The format fo
 - Relicensed from CC BY-NC 4.0 to MIT. Commercial use is allowed; keep the copyright notice. Third-party licenses are listed in the README.
 
 ### Fixed
+- `--backend haar` on OpenCV 5 now stops with a clear error and the command to install OpenCV 4.x, instead of an `AttributeError` or an `Assertion failed: !empty()` crash on the first frame. The install instructions now pin `opencv-python<5` and `opencv-contrib-python<5`; OpenCV 5 no longer includes the Haar face model.
 - Output quality ([#5](https://github.com/wishym1shy/face-be-gone/issues/5)). Frames used to go through OpenCV's old `mp4v` codec at a low bitrate, which visibly softened every output. They're now piped straight into ffmpeg and encoded once, as H.264 at CRF 16 by default. On test footage, quality outside blurred areas went from 25.8 dB to 44.8 dB PSNR, with a smaller file.
 - Audio sync on variable frame rate footage. Frames are now resampled to a constant rate by timestamp, so audio stays in sync; on an 11-minute VFR test clip, v1.1 drifted by up to two minutes.
 - Colors, full-range footage and rotation now round-trip correctly: decoding and encoding use the same color matrix, color tags are copied to the output, and rotated phone footage comes out upright.

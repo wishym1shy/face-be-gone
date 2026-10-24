@@ -1,5 +1,7 @@
 """Unit tests for the script's geometry, blur and tracking functions."""
 
+import types
+
 import numpy as np
 import pytest
 
@@ -69,6 +71,22 @@ def test_blur_region_ignores_empty_box():
 def test_blur_region_handles_even_strength():
     frame = noisy_frame()
     fbg.blur_region(frame, 40, 30, 100, 90, 40)  # forced odd internally; must not raise
+
+
+# --- Haar backend on OpenCV 5 ----------------------------------------------
+
+def test_haar_without_cascade_classifier_is_a_clear_error(monkeypatch):
+    """opencv-python 5 has no CascadeClassifier at all."""
+    monkeypatch.delattr(fbg.cv2, "CascadeClassifier", raising=False)
+    with pytest.raises(fbg.FaceBeGoneError, match="OpenCV 4"):
+        fbg.make_detector(0.5, backend="haar")
+
+
+def test_haar_without_model_file_is_a_clear_error(monkeypatch, tmp_path):
+    """opencv-contrib-python 5 has the class but not the model file."""
+    monkeypatch.setattr(fbg.cv2, "data", types.SimpleNamespace(haarcascades=str(tmp_path)), raising=False)
+    with pytest.raises(fbg.FaceBeGoneError, match="opencv-python<5"):
+        fbg.make_detector(0.5, backend="haar")
 
 
 # --- SmoothedBox -------------------------------------------------------------

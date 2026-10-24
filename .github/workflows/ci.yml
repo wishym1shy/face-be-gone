@@ -60,3 +60,27 @@ jobs:
       - name: Annotate failures
         if: failure() && hashFiles('pytest-report.xml') != ''
         run: python tests/annotate.py pytest-report.xml
+
+  # Users who install without the docs' version pins get OpenCV 5. Everything
+  # except the Haar backend must still work there, and Haar must fail clearly.
+  # A separate job, not a matrix entry, so the existing check names (required
+  # by the branch ruleset) don't change.
+  test-opencv5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tests/requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: python -m pip install -r tests/requirements.txt
+      # contrib is the trickier case: it has CascadeClassifier but no model file
+      - run: python -m pip uninstall -y opencv-python-headless && python -m pip install "opencv-contrib-python-headless>=5,<6"
+      - run: python -c "import cv2; print('::notice title=OpenCV::' + cv2.__version__)"
+      - run: python -m pytest -rxXs --junitxml=pytest-report.xml
+      - name: Annotate failures
+        if: failure() && hashFiles('pytest-report.xml') != ''
+        run: python tests/annotate.py pytest-report.xml
