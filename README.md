@@ -9,16 +9,18 @@ GPU-accelerated face blurring for video, built for precut footage. Every frame i
 ## Quick start
 
 ```powershell
-py -3.12 blur_faces_v1.1.py input.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
+py -3.12 facebegone.py input.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
 ```
 
 That's the max-accuracy combination: slower, but it catches faces the defaults miss. For everyday clips, the defaults are fine:
 
 ```powershell
-py -3.12 blur_faces_v1.1.py input.mp4 output.mp4 --strength 60
+py -3.12 facebegone.py input.mp4 output.mp4 --strength 60
 ```
 
 Use `--shape circle` for a feathered round blur, or `--pixelate` for a mosaic.
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed between versions; `--version` prints the one you have.
 
 ## Setup
 

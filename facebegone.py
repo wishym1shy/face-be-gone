@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-blur_faces_v1.1.py
+facebegone.py
 
 ================================================================================
   Script by:      wishym1shy (GitHub)
   Coded with:     Claude Code
-  Version:        1.1
+  Version:        1.1.0 (keep in sync with __version__ and CHANGELOG.md)
   License:        MIT (see LICENSE). Free to use, modify and share,
                   commercially or not; keep the copyright notice.
                   Dependencies keep their own licenses: ultralytics is
@@ -19,8 +19,8 @@ independently on every single frame, cuts don't break anything -- there's no
 "track" to lose the way a traditional NLE tracker would.
 
 Usage:
-    python blur_faces_v1.1.py input.mp4 output.mp4
-    python blur_faces_v1.1.py input.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
+    python facebegone.py input.mp4 output.mp4
+    python facebegone.py input.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
 """
 
 import argparse
@@ -34,6 +34,8 @@ from collections import deque
 
 import cv2
 import numpy as np
+
+__version__ = "1.1.0"
 
 MODEL_URLS = {
     "short": "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
@@ -288,6 +290,7 @@ def process_video(in_path, out_path, strength=35, confidence=0.5, pixelate=False
                    margin=0.25, smoothing=0.5, model_variant="full", backend="yolo",
                    yolo_size="m", device=None, imgsz=640, shape="rect"):
     start_time = time.time()
+    print(f"face-be-gone {__version__}", file=sys.stderr)
 
     cap = cv2.VideoCapture(in_path)
     if not cap.isOpened():
@@ -401,6 +404,7 @@ def process_video(in_path, out_path, strength=35, confidence=0.5, pixelate=False
 
 def main():
     parser = argparse.ArgumentParser(description="Auto-blur faces in a video, cut-proof.")
+    parser.add_argument("--version", action="version", version=f"face-be-gone {__version__}")
     parser.add_argument("input", help="input video path")
     parser.add_argument("output", help="output video path")
     parser.add_argument("--strength", type=int, default=35,

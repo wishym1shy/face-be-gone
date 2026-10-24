@@ -6,7 +6,8 @@ Guidance for Claude Code (and other contributors) working in this repository.
 
 A GPU-accelerated command-line tool that detects and blurs faces in video. Detection runs independently on every frame, so hard cuts in precut footage never break it. The default detector is YOLOv8-face, with MediaPipe and OpenCV Haar available as lighter alternatives. Audio is muxed back in with `ffmpeg`.
 
-- `blur_faces_v1.1.py`: the script (single file; the version is in the filename).
+- `facebegone.py`: the script (single file; the version is in `__version__`).
+- `CHANGELOG.md`: user-visible changes per release.
 - `docs/tutorial.md`: end-user setup and usage guide.
 - `README.md`: short overview and quick start.
 - `LICENSE`: MIT. Dependencies keep their own licenses; `ultralytics` is AGPL-3.0, which matters for anything bundled or hosted (see README).
@@ -30,11 +31,13 @@ This is a public repo. Do not add, anywhere in code, docs, comments, commit mess
 
 Use the owner's GitHub handle for attribution and generic wording ("users", "editors", "your footage") elsewhere. When writing git commits, use the configured GitHub identity, not a personal email.
 
-## Versioning
+## Versioning and changelog
 
-- The script's version lives in its filename and header (`blur_faces_vX.Y.py`).
-- For a behavior change, add a new versioned file rather than overwriting the old one, and keep the previous version available until the new one is validated on real footage.
-- Update every command example in the README and tutorial to the current filename when the version changes.
+- The script is always `facebegone.py`; don't put the version in the filename. The version lives in `__version__` and in the header's `Version:` line. Keep the two in sync.
+- Versions are `MAJOR.MINOR.PATCH`: patch for fixes that don't change flags or output, minor for new flags or changes to the output, major for breaking CLI changes (renamed or removed flags, or changed defaults).
+- Every PR that changes behavior, flags, output or install steps adds a line under `## [Unreleased]` in `CHANGELOG.md` (Added / Changed / Fixed / Removed). Purely internal or docs-only changes can skip it.
+- Cutting a release: move the Unreleased entries under a new `## [X.Y.Z] - YYYY-MM-DD` heading, bump `__version__` and the header, merge, then tag the merge commit `vX.Y.Z` and publish a GitHub release.
+- Previous versions stay available as tags and GitHub releases, not as side-by-side files. Don't cut a release containing a behavior change until it has been validated on real footage; until then, the latest release is the version users should download.
 - Keep the header's license and attribution block intact.
 
 ## Accuracy comes first
