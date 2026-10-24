@@ -35,6 +35,12 @@ def run_script(*args, stub=None, env=None, timeout=600):
     return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout)
 
 
+def ffmpeg_major_version():
+    first_line = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True).stdout.split("\n")[0]
+    match = re.search(r"version n?(\d+)\.", first_line)
+    return int(match.group(1)) if match else 0
+
+
 def ffmpeg(*args):
     subprocess.run(["ffmpeg", "-v", "error", "-y", *map(str, args)], check=True)
 
