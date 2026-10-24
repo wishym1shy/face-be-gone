@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SCRIPT = REPO / "blur_faces_v1.1.py"
+SCRIPT = REPO / "facebegone.py"
 STUB_RUNNER = Path(__file__).resolve().parent / "stub_run.py"
 
 
@@ -33,12 +33,6 @@ def run_script(*args, stub=None, env=None, timeout=600):
     else:
         cmd = [sys.executable, str(SCRIPT), *map(str, args)]
     return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout)
-
-
-def ffmpeg_major_version():
-    first_line = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True).stdout.split("\n")[0]
-    match = re.search(r"version n?(\d+)\.", first_line)
-    return int(match.group(1)) if match else 0
 
 
 def ffmpeg(*args):

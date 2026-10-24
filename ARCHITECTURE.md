@@ -2,7 +2,7 @@
 
 How face-be-gone works today, why it works that way, and where planned features plug in. Read this before changing detection, tracking, rendering or output code. For contribution rules (PR workflow, privacy, versioning), see [CLAUDE.md](CLAUDE.md).
 
-Line references point to `blur_faces_v1.1.py`.
+Code references point to functions in `facebegone.py` by name rather than line number, so they don't go stale as the file changes.
 
 ---
 
@@ -15,13 +15,16 @@ Line references point to `blur_faces_v1.1.py`.
 
 ## 2. Pipeline overview
 
-Everything is one streaming pass over the video, followed by an audio mux:
+Everything is one streaming pass over the video, between two ffmpeg processes:
 
 ```
-input.mp4
+input.mp4 ──► ffprobe: size, rotation, frame rate, color tags, audio streams, timecode
    │
    ▼
-cv2.VideoCapture ──► frame (BGR, uint8, W×H)
+ffmpeg decode (FfmpegReader): autorotate ─► fps=<avg rate> ─► BGR via source matrix ──► pipe
+   │
+   ▼
+frame (BGR, uint8, W×H, upright)
    │
    ├─► detect_faces()        per-frame boxes, pixel coords (x0,y0,x1,y1)
    │
@@ -33,17 +36,15 @@ cv2.VideoCapture ──► frame (BGR, uint8, W×H)
    │
    ├─► blur_region()         Gaussian blur or pixelate, rect or feathered ellipse, in place
    │
-   └─► cv2.VideoWriter (mp4v) ──► <output>.noaudio.mp4
-                                        │
-                                        ▼
-                      ffmpeg: copy video, AAC audio from input ──► output.mp4
+   └─► pipe ──► ffmpeg encode (FfmpegWriter): BGR ─► YUV via the same matrix ─► --codec
+                     + audio, metadata, timecode from input.mp4 ──► output file (single write, no temp file)
 ```
 
-The script runs top to bottom in `process_video()` (line 291). `main()` (line 406) only parses arguments and calls it.
+The script runs top to bottom in `process_video()`. `main()` only parses arguments and calls it.
 
 ## 3. Components
 
-### 3.1 Model management (lines 42–95)
+### 3.1 Model management (`ensure_model`, `ensure_yolo_model`)
 
 - **MediaPipe BlazeFace** (`.tflite`): `short` or `full` range, downloaded from Google's model storage by `ensure_model()`.
 - **YOLOv8-face** (`.pt`): sizes `n/s/m/l/x` from the [lindevs/yolov8-face](https://github.com/lindevs/yolov8-face) GitHub releases (trained on WIDER FACE), downloaded by `ensure_yolo_model()`.
@@ -52,7 +53,7 @@ The script runs top to bottom in `process_video()` (line 291). `main()` (line 40
 - URLs point at `releases/latest`, so the model can change underneath us. lindevs publishes SHA-256 checksums per asset. Pinning a release and verifying the checksum would make runs reproducible.
 - lindevs also publishes **ONNX** versions of every size, which matters for issue #11.
 
-### 3.2 Detector backends (`make_detector`, line 204; `detect_faces`, line 252)
+### 3.2 Detector backends (`make_detector`, `detect_faces`)
 
 A detector is a tuple `(backend_name, impl)`. `detect_faces()` branches on the name and always returns a list of `(x0, y0, x1, y1)` integer pixel boxes.
 
@@ -70,7 +71,7 @@ Details that matter:
 - `cvtColor` to RGB runs on every frame, but only MediaPipe uses the RGB copy (Ultralytics takes BGR numpy arrays directly). It's cheap but wasted for YOLO.
 - Inference runs one frame at a time in FP32. No batching and no `half=True`.
 
-### 3.3 Box expansion (`expand_box`, line 98)
+### 3.3 Box expansion (`expand_box`)
 
 Grows each detection by `margin × width` horizontally and `margin × height` vertically **on each side**, then clamps to the frame. A margin of 0.45 makes the box about 1.9× the detected size in each dimension.
 
@@ -78,13 +79,13 @@ YOLO face boxes are tight (roughly brow to chin). Without margin, hairlines, ear
 
 Expansion happens **before** tracking and smoothing, so the tracker and smoother work on expanded boxes.
 
-### 3.4 Tracking (`match_detections_to_tracks`, line 175)
+### 3.4 Tracking (`match_detections_to_tracks`)
 
 There's no real tracker, by design. The "tracks" exist only to give each face its own smoothing state.
 
 - Each frame, every detection is matched greedily, in detection order, to the nearest unused existing track whose smoothed centroid is within `max_dist = 0.08 × max(W, H)` pixels. That's about 154 px on a 1920-pixel side.
 - Unmatched detections start a new track.
-- **Any track not matched in the current frame is deleted immediately** (lines 348–351). There's no hold, no coasting and no re-identification.
+- **Any track not matched in the current frame is deleted immediately** (end of the frame loop in `process_video()`). There's no hold, no coasting and no re-identification.
 
 Consequences:
 
@@ -92,7 +93,7 @@ Consequences:
 - **A single missed detection means that face is unblurred for that frame**, and its smoothing restarts from scratch on the next detection. This is the main recall gap. Gap filling (#9) is the planned fix.
 - Greedy matching in detection order can swap tracks when two faces cross. That only affects smoothing, not coverage.
 
-### 3.5 Smoothing (`SmoothedBox`, line 151)
+### 3.5 Smoothing (`SmoothedBox`)
 
 An exponential moving average over `(cx, cy, w, h)`:
 
@@ -106,7 +107,7 @@ The blur is drawn at the **smoothed** box, not the raw detection. On fast motion
 
 **Tried and reverted:** a velocity-aware (predictive) smoother. It extrapolated box motion forward and, on real footage, pulled boxes off faces at frame edges, leaving them unblurred. It looked fine on synthetic tests. Lesson: causal prediction is risky. Prefer non-causal, two-pass approaches (#4, #9) and validate on real footage.
 
-### 3.6 Blur rendering (`blur_region`, line 109)
+### 3.6 Blur rendering (`blur_region`)
 
 Runs in place on the frame, once per smoothed box.
 
@@ -117,28 +118,35 @@ Runs in place on the frame, once per smoothed box.
 - Overlapping boxes are processed one after another, so overlaps get blurred twice. That's harmless.
 - The blur only samples pixels inside the box (OpenCV reflects at the box border), so the blur can't pick up detail from outside the face region.
 
-### 3.7 Output and audio mux (lines 306–403)
+### 3.7 Video I/O: decode, encode and mux (`FfmpegReader`, `FfmpegWriter`, `probe_video`)
 
-1. Frames go to `cv2.VideoWriter` with fourcc **`mp4v`** (MPEG-4 Part 2) at the source fps, to `<output>.noaudio.mp4`.
-2. If `ffmpeg` is on PATH, it runs:
-   `ffmpeg -y -i tmp -i input -c:v copy -c:a aac -map 0:v:0 -map 1:a:0? -shortest output`
-   - The video stream is **copied**, so the final file keeps the lossy `mp4v` encode. This is a known quality bug (#5).
-   - Only the **first audio track** is kept and always re-encoded to AAC. Other audio tracks, subtitles, timecode, rotation and color metadata are dropped.
-   - `1:a:0?` makes audio optional, so inputs without audio still work.
-3. If ffmpeg is missing, the silent temp file is copied to the output path with only a warning. If the mux fails, the same fallback happens and the temp file is left behind.
+Before any model loads, `check_ffmpeg()` verifies that `ffmpeg` and `ffprobe` are on PATH, the output extension suits `--codec`, and the ffmpeg build has the encoder. Then `probe_video()` reads the source with ffprobe.
 
-Other I/O assumptions:
+**Decode.** `FfmpegReader` runs `ffmpeg -i input -vf fps=<rate>,scale=in_color_matrix=<m>:in_range=<r>,format=bgr24 -f rawvideo -` and reads fixed-size frames from the pipe.
+- **Rotation:** ffmpeg auto-rotates on decode, so detection always sees upright frames (sideways faces are harder to detect) and the output needs no rotation tag. `probe_video()` swaps width and height for 90°/270° sources.
+- **Frame rate:** the `fps` filter resamples to the source's average frame rate by timestamp, duplicating or dropping frames as needed. Frame N is then always at N / fps seconds, which keeps variable frame rate sources in sync with the audio. On constant-rate sources it's a no-op.
+- **Color:** the matrix and range come from the source's tags (`_color_conversion()`). Untagged sources use BT.709 for HD and BT.601 for SD.
 
-- `fps` falls back to 30 if OpenCV reports 0. Variable-frame-rate sources are treated as constant, so audio can drift on long VFR clips.
-- `total_frames` comes from container metadata and can be approximate, so the progress percentage can be slightly off.
-- Rotation metadata on phone footage isn't explicitly handled; it depends on OpenCV's backend.
+**Encode.** `FfmpegWriter` runs a second ffmpeg that reads raw BGR frames from a pipe and the original file as a second input:
+- Video is converted back to YUV with **the same matrix and range used for decoding**. That pairing is what keeps unblurred pixels matching the source; mismatched matrices shift colors visibly. Odd dimensions are padded by 1 px for 4:2:0/4:2:2.
+- Codec settings live in the `CODECS` table: `h264` (libx264, CRF 16, `-preset slow`, the default), `hevc` (libx265, CRF 18, tagged `hvc1` in MP4/MOV for Apple players), `h264_nvenc`/`hevc_nvenc` (`-cq`), `prores` (prores_ks HQ, 10-bit 4:2:2) and `dnxhr` (DNxHR HQ). ProRes and DNxHR are limited to `.mov`/`.mkv`.
+- Color tags (range, primaries, transfer, matrix) are copied from the source when present, both as encoder flags and onto the frames with `setparams`. ffmpeg 9 takes the tags from the frames and silently dropped primaries and transfer given only as flags, which would break HDR display.
+- **Audio:** every audio track is mapped. Each track is stream-copied if `AUDIO_COPY_OK` lists its codec for the output container (MKV takes anything), otherwise re-encoded to AAC 320k.
+- `-map_metadata 1` carries over global metadata (creation time and so on). A source timecode is written with `-timecode` for MOV/MP4.
+- No `-shortest`: it dropped the last video frame when the audio ended a few milliseconds early (in v1.1's stream-copy mux this showed up on ffmpeg 9+, which current Windows and macOS installs get). Both streams keep their source durations.
+
+**Failure handling.** ffmpeg's stderr goes to temp files and the last lines are shown in the error. A failed encode, failed decode or Ctrl+C kills both processes and deletes the incomplete output, so a truncated file can't pass for a deliverable. Errors raise `FaceBeGoneError`, and `main()` prints them and exits with status 1.
+
+**Fallback.** If ffmpeg is missing, the run stops with install instructions. With `--allow-no-audio` it uses `OpenCVReader`/`OpenCVWriter` instead: `cv2.VideoCapture` in, `mp4v` out, no audio, behind a loud warning. That's the old v1.1 output path.
+
+**Measured on synthetic test clips** (stub detector, so only I/O differs): quality outside blurred regions went from 25.8 dB PSNR (v1.1) to 44.8 dB, and the file got smaller. Full-range footage went from 25.4 to 48.5 dB. On an 11-minute variable frame rate clip, v1.1's audio drifted by up to two minutes; the new path stays frame-accurate. About 35 dB is the floor on deliberately oversaturated test patterns, because out-of-gamut colors clip in the 8-bit RGB intermediate.
 
 ### 3.8 Logging and timing
 
-- Startup: model download notices and `YOLOv8-face running on: cuda|cpu` on stderr.
+- Startup: `face-be-gone <version>`, model download notices, `YOLOv8-face running on: cuda|cpu`, then `Encoding: <codec> (<encoder>, CRF n), WxH @ fps` and `Audio: <per-track copied or re-encoded>` on stderr. A note is printed when a variable frame rate source is converted. `--version` prints the version and exits.
 - Progress line every 100 frames on stderr: `N/total frames (pct) -- Xm Ys elapsed`.
 - End: `Done: <path>` and `Total time: ...` on stdout.
-- `process_video()` calls `sys.exit(1)` if the input can't be opened, which is unfriendly for library use. Raise instead when refactoring.
+- `process_video()` raises `FaceBeGoneError` for user-fixable problems; only `main()` exits.
 
 ## 4. CLI reference (current defaults)
 
@@ -156,6 +164,9 @@ Other I/O assumptions:
 | `--strength` | `35` | render | Gaussian kernel px. 80 validated. Ignored with `--pixelate`. |
 | `--pixelate` | off | render | Mosaic instead of blur |
 | `--shape` | `rect` | render | `rect`, `circle` |
+| `--codec` | `h264` | output | `h264 hevc h264_nvenc hevc_nvenc prores dnxhr`; ProRes/DNxHR need `.mov`/`.mkv` |
+| `--crf` | per codec | output | h264 16, hevc 18, h264_nvenc 19, hevc_nvenc 21 (`-cq` for NVENC). Ignored for ProRes/DNxHR. |
+| `--allow-no-audio` | off | output | Only matters when ffmpeg is missing: render with OpenCV, no audio, `mp4v` |
 
 **Validated max-accuracy combination:**
 
@@ -188,7 +199,7 @@ Where the time goes: YOLO inference dominates, then decode/encode. Batching fram
 | `opencv-python` | decode, image ops, encode | |
 | `numpy` | arrays | |
 | `mediapipe` | optional backend | Imported lazily |
-| `ffmpeg` binary | audio mux | Must be on PATH |
+| `ffmpeg` + `ffprobe` binaries | decode, encode, mux, probing | Required on PATH; the run stops without them unless `--allow-no-audio` |
 
 There's no `requirements.txt` or `pyproject.toml` yet; install steps live in `docs/tutorial.md`. Imports for optional backends are lazy, so `haar` runs with only OpenCV and numpy.
 
@@ -202,14 +213,13 @@ There's no `requirements.txt` or `pyproject.toml` yet; install steps live in `do
 | Backward-only EMA | Box trails fast-moving faces | #4, #9 |
 | Blur at the smoothed box, not the union with the raw box | Fast motion can uncover part of a face | #9 |
 | Confidence scores discarded | No way to flag near misses | #4, #8 |
-| `mp4v` intermediate copied into the output | Quality loss and larger files | #5 |
-| Metadata, extra audio tracks and subtitles dropped | Rotation, color and VFR issues | #5 |
-| Missing ffmpeg only warns | Silent deliverable | #5 |
-| `-shortest` stream-copy mux drops the last frame on ffmpeg 9+ | One frame lost per clip with current Windows/macOS ffmpeg builds (6.1 and 7.0 unaffected) | #5 |
+| Frames pass through 8-bit BGR | 10-bit and HDR sources are reduced to 8 bits (PQ/HLG tags are kept, so they still display correctly) | |
+| VFR converted to constant frame rate at the average rate | Sources with large rate swings get duplicated or dropped frames | |
+| Subtitle and data streams not copied | Captions and other side streams are lost (timecode and pixel aspect ratio are kept) | |
 | No OOM handling | Crash at high `--imgsz` / `x` with low free VRAM | |
 | Unpinned model URLs, size-only check | Non-reproducible or corrupt weights | |
 | No recall benchmark; CI can't test detection accuracy | Detection regressions judged by eye | #2 |
-| Single-file script, `sys.exit` inside logic | Hard to reuse from a GUI | #4 |
+| Single-file script | Hard to reuse from a GUI | #4 |
 
 ## 8. Target architecture
 
@@ -278,7 +288,7 @@ Rules:
 **What exists** (`tests/`, run by `.github/workflows/ci.yml` on Linux, Windows and macOS with Python 3.12):
 
 - `test_units.py`: `expand_box` clamping, `blur_region` never touches pixels outside its box (every shape and mode), circle corners stay untouched, `SmoothedBox`, matching and `format_elapsed`.
-- `test_pipeline.py`: end-to-end runs on clips generated by ffmpeg in `conftest.py`. One test runs the real Haar detector; the rest use `stub_run.py`, which swaps in a detector that finds nothing or a fixed box, so only I/O and rendering are exercised. It checks frame counts, rotation, blur placement, quality against the source (PSNR), A/V sync on variable frame rate (flash and beep markers every 6 s), color range, audio tracks and the missing-ffmpeg path. Known bugs are `xfail(strict=True)` and name their issue.
+- `test_pipeline.py`: end-to-end runs on clips generated by ffmpeg in `conftest.py`. One test runs the real Haar detector; the rest use `stub_run.py`, which swaps in a detector that finds nothing or a fixed box, so only I/O and rendering are exercised. It checks frame counts, rotation, blur placement, quality against the source (PSNR), A/V sync on variable frame rate (flash and beep markers every 6 s), color range and tags, audio tracks and when they're copied, timecode, pixel aspect ratio, odd dimensions, every `--codec`, `--crf`, and the error paths (bad container, missing input or ffmpeg, `--allow-no-audio`, a failed encode leaving no file). Known bugs can be written as `xfail(strict=True)` naming their issue.
 - CI pins `opencv-python-headless<5`, because OpenCV 5 dropped `cv2.CascadeClassifier` and with it the Haar backend.
 - CI has no GPU and doesn't install PyTorch, so the YOLO and MediaPipe backends aren't exercised there.
 
@@ -300,4 +310,7 @@ Rules:
 | Multi-scale / tiled detection reverted | Merging detections from several scales degraded edge coverage on real footage. Revisit only behind the benchmark. |
 | Python 3.12 | Reliable CUDA PyTorch wheels; 3.14 silently fell back to CPU. |
 | Install command taken from pytorch.org, never hardcoded | A hardcoded `cu124` index went stale and silently installed CPU builds. |
+| Decode and encode both through ffmpeg pipes (#5) | Encoding once avoids the old double lossy generation. Decoding through ffmpeg too, rather than OpenCV, makes rotation, color matrix and VFR handling explicit and identical across OpenCV versions (OpenCV 4.x and 5.x differ). |
+| Resample VFR to CFR by timestamp | Keeps audio in sync without carrying per-frame timestamps through the pipeline. |
+| Missing ffmpeg is an error, not a warning | A silent, lower-quality deliverable is worse than a failed run. |
 | MIT license (replaced CC BY-NC 4.0) | The goal is to share the tool with anyone, commercial use included. CC licenses aren't designed for software, and the non-commercial clause conflicted with AGPL dependencies for packaged releases. |

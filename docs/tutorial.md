@@ -61,6 +61,11 @@ This installs the AI/computer-vision libraries the script depends on, including 
   - **If you're on Python 3.12:** the command should succeed and pull in CUDA-enabled PyTorch directly.
   - **If you're on a newer Python version and it fails** with `No matching distribution found for torch`: this confirms the version incompatibility from Step 1. Install Python 3.12 and repeat this step using `py -3.12 -m pip install ...` instead of plain `python -m pip install ...`.
 - This is a large download (roughly 2–3GB) since CUDA-enabled PyTorch bundles GPU runtime libraries. Expect it to take a few minutes depending on connection speed.
+- **Install ffmpeg.** The script uses it to read your footage and write the finished video with its audio, and stops with an error if it's missing.
+  - Windows: `winget install Gyan.FFmpeg` (or download a build from https://ffmpeg.org/download.html and add its `bin` folder to PATH)
+  - macOS: `brew install ffmpeg`
+  - Linux: `sudo apt install ffmpeg` (or your distro's package manager)
+  - Close and reopen the terminal, then confirm both `ffmpeg -version` and `ffprobe -version` print a version.
 
 ### Step 4 — Verify GPU (CUDA) is actually being used
 
@@ -76,7 +81,7 @@ This is the step that confirms the install actually worked — it's possible for
 
 ### Step 5 — Get the script and a test clip ready
 
-- Place `blur_faces_v1.1.py` in a working folder (e.g. a folder on your Desktop or in Documents).
+- Place `facebegone.py` in a working folder (e.g. a folder on your Desktop or in Documents).
 - Place a short test video clip (5–15 seconds is plenty for testing) in the same folder.
 - Open a terminal/PowerShell window and navigate to that folder:
   ```powershell
@@ -89,10 +94,11 @@ This is the standard command for routine volume — fast, and accurate for the l
 
 - Run (use `py -3.12` prefix if applicable):
   ```powershell
-  python blur_faces_v1.1.py test_clip.mp4 test_output.mp4 --strength 60
+  python facebegone.py test_clip.mp4 test_output.mp4 --strength 60
   ```
 - The first time you use a given detection backend or model size, the script automatically downloads a small model file (a few hundred KB to ~50MB depending on model size) — expected, only happens once per model.
 - Watch the terminal output for the line `YOLOv8-face running on: cuda`. If it says `cpu` instead, GPU acceleration isn't active — revisit Step 4.
+- The `Encoding:` and `Audio:` lines show how the output is being written, for example `h264 (libx264, CRF 16)` and `aac (copied)`.
 - Open the resulting output video and confirm faces are blurred correctly with no obvious gaps.
 
 ### Step 7 — Know when to reach for the higher-accuracy settings
@@ -105,10 +111,22 @@ Default settings work well for most footage. Use the settings below only on clip
 - **Blur itself looks too light or too small:** increase `--strength` (try 75–85) and/or `--margin` (try 0.45) for a bigger, heavier blur region.
 - **Tested maximum-accuracy combination** (confirmed to catch off-angle and distant faces that default settings miss, at the cost of significantly longer render time):
   ```powershell
-  python blur_faces_v1.1.py clip.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
+  python facebegone.py clip.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
   ```
 
-### Step 8 — Know when it's faster to just do it by hand
+### Step 8 — Pick an output format
+
+The default output is high-quality H.264 that plays anywhere. Audio is copied from the source untouched when the output container supports it, and re-encoded to AAC otherwise.
+
+- **Bringing the result back into Resolve or Premiere for more editing:** use an intermediate codec with a `.mov` output, so the footage doesn't lose quality to another lossy generation:
+  ```powershell
+  python facebegone.py clip.mp4 output.mov --codec prores
+  ```
+  `--codec dnxhr` works the same way. Both make large files.
+- **Faster encoding on an NVIDIA GPU:** `--codec h264_nvenc` or `--codec hevc_nvenc`. Encoding is rarely the slow part, so this mostly helps with the fastest detection settings.
+- **Smaller files:** `--codec hevc`, or raise `--crf` (lower is better quality and bigger; the h264 default is 16, which is visually close to the source).
+
+### Step 9 — Know when it's faster to just do it by hand
 
 - If a clip has one persistent, isolated face the script keeps missing even at max settings (e.g. one background extra at extreme distance), it's faster to let the automated pass handle everything else and manually window-and-track just that one face, rather than re-rendering the whole clip at ever-higher settings.
 - **Rule of thumb:** escalate settings when the problem is a recurring, recognizable pattern (e.g. this footage always has a moving interviewer in frame). A one-off background miss is cheaper to fix by hand.
@@ -122,6 +140,7 @@ Default settings work well for most footage. Use the settings below only on clip
 - ⚠ A hardcoded CUDA index tag (like `cu124`) in an install command can go stale over time as PyTorch retires old CUDA versions in favor of newer ones — pip will not error when this happens, it silently installs a CPU-only build instead. Always cross-check https://pytorch.org/get-started/locally/ for the current tag rather than trusting an old copy-pasted command, including the one in this doc.
 - ⚠ Don't default `--imgsz` above 640 for routine batches — it's a per-clip accuracy tool for flagged problem footage, not a blanket setting, and meaningfully increases render time across all footage if left on by default.
 - ⚠ Background applications (browsers, chat apps, game clients) can reserve significant GPU memory and reduce the speed benefit available to this script — check `nvidia-smi` if GPU runs feel slower than expected.
+- ⚠ Variable frame rate footage (common from phones and screen recordings) is converted to a constant frame rate so the audio stays in sync. The script prints a note when this happens.
 - ⚠ This script processes video locally on your machine. No footage is uploaded anywhere; only a small one-time AI model file (a few hundred KB to ~50MB) is downloaded from the model provider's servers.
 
 ---

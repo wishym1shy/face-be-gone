@@ -12,6 +12,9 @@ if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
 # A soft, camera-like picture: testsrc2's saturated bars clip in an 8-bit RGB
 # round trip, which would hide real encoding differences.
 SOFT = "eq=contrast=0.8:saturation=0.6,gblur=sigma=1"
+# Color tags go on the frames (setparams) as well as the encoder flags:
+# ffmpeg 9 ignores -color_primaries/-color_trc for frames that don't carry them.
+BT709 = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"
 COLOR_TAGS = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
 
 
@@ -24,7 +27,7 @@ def media(tmp_path_factory):
 def clip(media):
     """2 s, 320x240 at 29.97 fps, BT.709-tagged H.264 with an AAC tone."""
     path = media / "clip.mp4"
-    ffmpeg("-f", "lavfi", "-i", f"testsrc2=size=320x240:rate=30000/1001:duration=2,{SOFT}",
+    ffmpeg("-f", "lavfi", "-i", f"testsrc2=size=320x240:rate=30000/1001:duration=2,{SOFT},{BT709}",
            "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
            "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", *COLOR_TAGS, "-c:a", "aac", path)
     return path
@@ -84,4 +87,39 @@ def vfr_clip(media):
            "-f", "lavfi", "-i", "sine=f=1000:d=24:sample_rate=48000,volume=0:enable='gte(mod(t\\,6)\\,0.1)'",
            "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]", "-map", "2:a",
            "-fps_mode", "vfr", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", path)
+    return path
+
+
+@pytest.fixture(scope="session")
+def timecode_clip(media, clip):
+    path = media / "timecode.mov"
+    ffmpeg("-i", clip, "-c", "copy", "-timecode", "01:00:00:00", path)
+    return path
+
+
+@pytest.fixture(scope="session")
+def anamorphic_clip(media, clip):
+    """720x480 with non-square pixels (SAR 32:27), displayed as 16:9."""
+    path = media / "anamorphic.mp4"
+    ffmpeg("-i", clip, "-vf", "scale=720:480,setsar=32/27", "-c:v", "libx264", "-c:a", "copy", path)
+    return path
+
+
+@pytest.fixture(scope="session")
+def odd_size_clip(media, clip):
+    """321x241, stored as 4:4:4 because 4:2:0 can't have odd dimensions."""
+    path = media / "odd_size.mp4"
+    ffmpeg("-i", clip, "-vf", "scale=321:241,format=yuv444p", "-c:v", "libx264", "-c:a", "copy", path)
+    return path
+
+
+@pytest.fixture(scope="session")
+def hdr_tagged_clip(media):
+    """Tagged as HDR10 (BT.2020, PQ). The pixels are ordinary 8-bit; only the
+    tags matter, since players use them to decide how to display the video."""
+    path = media / "hdr_tagged.mp4"
+    tags = "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc"
+    ffmpeg("-f", "lavfi", "-i", f"testsrc2=size=320x240:rate=25:duration=1,{SOFT},{tags}",
+           "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc", path)
     return path
