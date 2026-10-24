@@ -113,12 +113,24 @@ def test_full_range_is_preserved(full_range_clip, tmp_path):
     assert psnr(full_range_clip, out) > 40
 
 
+def color_tags(path):
+    stream = video_stream(path)
+    return stream.get("color_space"), stream.get("color_primaries"), stream.get("color_transfer")
+
+
 def test_color_tags_are_copied(clip, tmp_path):
+    assert color_tags(clip) == ("bt709", "bt709", "bt709"), "test clip is missing its tags"
     out = tmp_path / "out.mp4"
     ok(run_script(clip, out, stub="none"))
-    stream = video_stream(out)
-    assert (stream.get("color_space"), stream.get("color_primaries"), stream.get("color_transfer")) == \
-        ("bt709", "bt709", "bt709")
+    assert color_tags(out) == color_tags(clip)
+
+
+def test_hdr_tags_are_copied(hdr_tagged_clip, tmp_path):
+    """Losing the PQ transfer tag makes HDR footage display washed out."""
+    assert color_tags(hdr_tagged_clip) == ("bt2020nc", "bt2020", "smpte2084"), "test clip is missing its tags"
+    out = tmp_path / "out.mp4"
+    ok(run_script(hdr_tagged_clip, out, stub="none"))
+    assert color_tags(out) == color_tags(hdr_tagged_clip)
 
 
 def test_keeps_all_audio_tracks(two_track_clip, tmp_path):
