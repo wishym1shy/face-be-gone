@@ -1,0 +1,7 @@
+# What CI installs. The tests use the Haar backend and a stub detector, so they
+# need no PyTorch, Ultralytics, MediaPipe or GPU.
+numpy
+# OpenCV 5 removed cv2.CascadeClassifier from the main package, which breaks
+# --backend haar. Keep CI on 4.x until the script supports 5.
+opencv-python-headless>=4.8,<5
+pytest

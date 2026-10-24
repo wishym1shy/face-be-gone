@@ -3,3 +3,6 @@
 *.mp4
 *.mov
 __pycache__/
+.pytest_cache/
+.ruff_cache/
+pytest-report.xml

@@ -10,6 +10,7 @@ A GPU-accelerated command-line tool that detects and blurs faces in video. Detec
 - `docs/tutorial.md`: end-user setup and usage guide.
 - `README.md`: short overview and quick start.
 - `LICENSE`: MIT. Dependencies keep their own licenses; `ultralytics` is AGPL-3.0, which matters for anything bundled or hosted (see README).
+- `tests/`: pytest suite run by CI (`.github/workflows/ci.yml`) on Linux, Windows and macOS.
 - `ARCHITECTURE.md`: how the pipeline works, known limitations, target architecture and decision log. Read it before changing detection, tracking, rendering or output code, and update it in the same PR when you change how any of those work.
 
 ## Workflow: always use pull requests
@@ -36,6 +37,13 @@ Use the owner's GitHub handle for attribution and generic wording ("users", "edi
 - For a behavior change, add a new versioned file rather than overwriting the old one, and keep the previous version available until the new one is validated on real footage.
 - Update every command example in the README and tutorial to the current filename when the version changes.
 - Keep the header's license and attribution block intact.
+
+## Tests and CI
+
+- Run `python -m pip install -r tests/requirements.txt` once, then `python -m pytest` before opening a PR. ffmpeg must be on PATH. CI runs the same suite plus `ruff check .` on every PR, and both must pass before merging.
+- Tests generate their clips with ffmpeg's built-in test sources. Never commit real footage or test clips, even for a test.
+- The tests run without a GPU or PyTorch: they use the Haar backend, or `tests/stub_run.py` to replace the detector with a fixed result. CI can't judge detection accuracy; that's the recall benchmark's job (#2).
+- A behavior change or bug fix comes with a test. A known bug can be written as `@pytest.mark.xfail(strict=True, reason=...)` naming its issue; the PR that fixes it removes the marker (strict mode fails the run until it does).
 
 ## Accuracy comes first
 
