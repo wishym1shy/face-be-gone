@@ -205,6 +205,7 @@ There's no `requirements.txt` or `pyproject.toml` yet; install steps live in `do
 | `mp4v` intermediate copied into the output | Quality loss and larger files | #5 |
 | Metadata, extra audio tracks and subtitles dropped | Rotation, color and VFR issues | #5 |
 | Missing ffmpeg only warns | Silent deliverable | #5 |
+| `-shortest` stream-copy mux drops the last frame on ffmpeg 9+ | One frame lost per clip with current Windows/macOS ffmpeg builds (6.1 and 7.0 unaffected) | #5 |
 | No OOM handling | Crash at high `--imgsz` / `x` with low free VRAM | |
 | Unpinned model URLs, size-only check | Non-reproducible or corrupt weights | |
 | No recall benchmark; CI can't test detection accuracy | Detection regressions judged by eye | #2 |
