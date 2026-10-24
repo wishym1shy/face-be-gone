@@ -504,6 +504,15 @@ class FfmpegWriter:
         vf.append(f"scale=out_color_matrix={matrix}:out_range={rng},format={spec['pix_fmt']}")
         if info["sar"]:
             vf.append(f"setsar={info['sar'].replace(':', '/')}")  # anamorphic sources keep their display shape
+        # Tag the frames themselves as well as the encoder (the -color_* flags
+        # below): newer ffmpeg (seen with 9.0) takes color tags from the frames
+        # and drops primaries/transfer given only as flags. That would make HDR
+        # footage display wrongly.
+        frame_tags = [f"{name}={info[key]}" for name, key in (
+            ("range", "color_range"), ("color_primaries", "color_primaries"),
+            ("color_trc", "color_transfer"), ("colorspace", "color_space")) if info[key]]
+        if frame_tags:
+            vf.append("setparams=" + ":".join(frame_tags))
 
         cmd = ["ffmpeg", "-y", "-v", "error", "-nostdin",
                "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{info['width']}x{info['height']}",

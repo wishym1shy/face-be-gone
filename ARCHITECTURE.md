@@ -130,7 +130,7 @@ Before any model loads, `check_ffmpeg()` verifies that `ffmpeg` and `ffprobe` ar
 **Encode.** `FfmpegWriter` runs a second ffmpeg that reads raw BGR frames from a pipe and the original file as a second input:
 - Video is converted back to YUV with **the same matrix and range used for decoding**. That pairing is what keeps unblurred pixels matching the source; mismatched matrices shift colors visibly. Odd dimensions are padded by 1 px for 4:2:0/4:2:2.
 - Codec settings live in the `CODECS` table: `h264` (libx264, CRF 16, `-preset slow`, the default), `hevc` (libx265, CRF 18, tagged `hvc1` in MP4/MOV for Apple players), `h264_nvenc`/`hevc_nvenc` (`-cq`), `prores` (prores_ks HQ, 10-bit 4:2:2) and `dnxhr` (DNxHR HQ). ProRes and DNxHR are limited to `.mov`/`.mkv`.
-- Color tags (range, primaries, transfer, matrix) are copied from the source when present.
+- Color tags (range, primaries, transfer, matrix) are copied from the source when present, both as encoder flags and onto the frames with `setparams`. ffmpeg 9 takes the tags from the frames and silently dropped primaries and transfer given only as flags, which would break HDR display.
 - **Audio:** every audio track is mapped. Each track is stream-copied if `AUDIO_COPY_OK` lists its codec for the output container (MKV takes anything), otherwise re-encoded to AAC 320k.
 - `-map_metadata 1` carries over global metadata (creation time and so on). A source timecode is written with `-timecode` for MOV/MP4.
 - No `-shortest`: it dropped the last video frame when the audio ended a few milliseconds early (in v1.1's stream-copy mux this showed up on ffmpeg 9+, which current Windows and macOS installs get). Both streams keep their source durations.
