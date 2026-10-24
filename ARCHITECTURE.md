@@ -2,7 +2,7 @@
 
 How face-be-gone works today, why it works that way, and where planned features plug in. Read this before changing detection, tracking, rendering or output code. For contribution rules (PR workflow, privacy, versioning), see [CLAUDE.md](CLAUDE.md).
 
-Line references point to `blur_faces_v1.1.py`.
+Code references point to functions in `facebegone.py` by name rather than line number, so they don't go stale as the file changes.
 
 ---
 
@@ -39,11 +39,11 @@ cv2.VideoCapture ──► frame (BGR, uint8, W×H)
                       ffmpeg: copy video, AAC audio from input ──► output.mp4
 ```
 
-The script runs top to bottom in `process_video()` (line 291). `main()` (line 406) only parses arguments and calls it.
+The script runs top to bottom in `process_video()`. `main()` only parses arguments and calls it.
 
 ## 3. Components
 
-### 3.1 Model management (lines 42–95)
+### 3.1 Model management (`ensure_model`, `ensure_yolo_model`)
 
 - **MediaPipe BlazeFace** (`.tflite`): `short` or `full` range, downloaded from Google's model storage by `ensure_model()`.
 - **YOLOv8-face** (`.pt`): sizes `n/s/m/l/x` from the [lindevs/yolov8-face](https://github.com/lindevs/yolov8-face) GitHub releases (trained on WIDER FACE), downloaded by `ensure_yolo_model()`.
@@ -52,7 +52,7 @@ The script runs top to bottom in `process_video()` (line 291). `main()` (line 40
 - URLs point at `releases/latest`, so the model can change underneath us. lindevs publishes SHA-256 checksums per asset. Pinning a release and verifying the checksum would make runs reproducible.
 - lindevs also publishes **ONNX** versions of every size, which matters for issue #11.
 
-### 3.2 Detector backends (`make_detector`, line 204; `detect_faces`, line 252)
+### 3.2 Detector backends (`make_detector`, `detect_faces`)
 
 A detector is a tuple `(backend_name, impl)`. `detect_faces()` branches on the name and always returns a list of `(x0, y0, x1, y1)` integer pixel boxes.
 
@@ -70,7 +70,7 @@ Details that matter:
 - `cvtColor` to RGB runs on every frame, but only MediaPipe uses the RGB copy (Ultralytics takes BGR numpy arrays directly). It's cheap but wasted for YOLO.
 - Inference runs one frame at a time in FP32. No batching and no `half=True`.
 
-### 3.3 Box expansion (`expand_box`, line 98)
+### 3.3 Box expansion (`expand_box`)
 
 Grows each detection by `margin × width` horizontally and `margin × height` vertically **on each side**, then clamps to the frame. A margin of 0.45 makes the box about 1.9× the detected size in each dimension.
 
@@ -78,13 +78,13 @@ YOLO face boxes are tight (roughly brow to chin). Without margin, hairlines, ear
 
 Expansion happens **before** tracking and smoothing, so the tracker and smoother work on expanded boxes.
 
-### 3.4 Tracking (`match_detections_to_tracks`, line 175)
+### 3.4 Tracking (`match_detections_to_tracks`)
 
 There's no real tracker, by design. The "tracks" exist only to give each face its own smoothing state.
 
 - Each frame, every detection is matched greedily, in detection order, to the nearest unused existing track whose smoothed centroid is within `max_dist = 0.08 × max(W, H)` pixels. That's about 154 px on a 1920-pixel side.
 - Unmatched detections start a new track.
-- **Any track not matched in the current frame is deleted immediately** (lines 348–351). There's no hold, no coasting and no re-identification.
+- **Any track not matched in the current frame is deleted immediately** (end of the frame loop in `process_video()`). There's no hold, no coasting and no re-identification.
 
 Consequences:
 
@@ -92,7 +92,7 @@ Consequences:
 - **A single missed detection means that face is unblurred for that frame**, and its smoothing restarts from scratch on the next detection. This is the main recall gap. Gap filling (#9) is the planned fix.
 - Greedy matching in detection order can swap tracks when two faces cross. That only affects smoothing, not coverage.
 
-### 3.5 Smoothing (`SmoothedBox`, line 151)
+### 3.5 Smoothing (`SmoothedBox`)
 
 An exponential moving average over `(cx, cy, w, h)`:
 
@@ -106,7 +106,7 @@ The blur is drawn at the **smoothed** box, not the raw detection. On fast motion
 
 **Tried and reverted:** a velocity-aware (predictive) smoother. It extrapolated box motion forward and, on real footage, pulled boxes off faces at frame edges, leaving them unblurred. It looked fine on synthetic tests. Lesson: causal prediction is risky. Prefer non-causal, two-pass approaches (#4, #9) and validate on real footage.
 
-### 3.6 Blur rendering (`blur_region`, line 109)
+### 3.6 Blur rendering (`blur_region`)
 
 Runs in place on the frame, once per smoothed box.
 
@@ -117,7 +117,7 @@ Runs in place on the frame, once per smoothed box.
 - Overlapping boxes are processed one after another, so overlaps get blurred twice. That's harmless.
 - The blur only samples pixels inside the box (OpenCV reflects at the box border), so the blur can't pick up detail from outside the face region.
 
-### 3.7 Output and audio mux (lines 306–403)
+### 3.7 Output and audio mux (`process_video()`)
 
 1. Frames go to `cv2.VideoWriter` with fourcc **`mp4v`** (MPEG-4 Part 2) at the source fps, to `<output>.noaudio.mp4`.
 2. If `ffmpeg` is on PATH, it runs:
@@ -135,7 +135,7 @@ Other I/O assumptions:
 
 ### 3.8 Logging and timing
 
-- Startup: model download notices and `YOLOv8-face running on: cuda|cpu` on stderr.
+- Startup: `face-be-gone <version>`, model download notices and `YOLOv8-face running on: cuda|cpu` on stderr. `--version` prints the version and exits.
 - Progress line every 100 frames on stderr: `N/total frames (pct) -- Xm Ys elapsed`.
 - End: `Done: <path>` and `Total time: ...` on stdout.
 - `process_video()` calls `sys.exit(1)` if the input can't be opened, which is unfriendly for library use. Raise instead when refactoring.

@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SCRIPT = REPO / "blur_faces_v1.1.py"
+SCRIPT = REPO / "facebegone.py"
 STUB_RUNNER = Path(__file__).resolve().parent / "stub_run.py"
 
 

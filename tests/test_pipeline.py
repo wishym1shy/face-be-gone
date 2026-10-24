@@ -5,6 +5,7 @@ today; once the fix lands they pass, and strict mode then fails the run until
 the marker is removed, so a fix can't go unnoticed and a regression can't
 slip back in afterwards."""
 
+import re
 import subprocess
 
 import numpy as np
@@ -28,6 +29,11 @@ def ok(result):
 def test_help():
     result = ok(run_script("--help"))
     assert "--backend" in result.stdout
+
+
+def test_version():
+    result = ok(run_script("--version"))
+    assert re.fullmatch(r"face-be-gone \d+\.\d+\.\d+", result.stdout.strip())
 
 
 def test_haar_end_to_end(clip, tmp_path):

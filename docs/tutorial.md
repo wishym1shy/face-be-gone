@@ -76,7 +76,7 @@ This is the step that confirms the install actually worked — it's possible for
 
 ### Step 5 — Get the script and a test clip ready
 
-- Place `blur_faces_v1.1.py` in a working folder (e.g. a folder on your Desktop or in Documents).
+- Place `facebegone.py` in a working folder (e.g. a folder on your Desktop or in Documents).
 - Place a short test video clip (5–15 seconds is plenty for testing) in the same folder.
 - Open a terminal/PowerShell window and navigate to that folder:
   ```powershell
@@ -89,7 +89,7 @@ This is the standard command for routine volume — fast, and accurate for the l
 
 - Run (use `py -3.12` prefix if applicable):
   ```powershell
-  python blur_faces_v1.1.py test_clip.mp4 test_output.mp4 --strength 60
+  python facebegone.py test_clip.mp4 test_output.mp4 --strength 60
   ```
 - The first time you use a given detection backend or model size, the script automatically downloads a small model file (a few hundred KB to ~50MB depending on model size) — expected, only happens once per model.
 - Watch the terminal output for the line `YOLOv8-face running on: cuda`. If it says `cpu` instead, GPU acceleration isn't active — revisit Step 4.
@@ -105,7 +105,7 @@ Default settings work well for most footage. Use the settings below only on clip
 - **Blur itself looks too light or too small:** increase `--strength` (try 75–85) and/or `--margin` (try 0.45) for a bigger, heavier blur region.
 - **Tested maximum-accuracy combination** (confirmed to catch off-angle and distant faces that default settings miss, at the cost of significantly longer render time):
   ```powershell
-  python blur_faces_v1.1.py clip.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
+  python facebegone.py clip.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
   ```
 
 ### Step 8 — Know when it's faster to just do it by hand
