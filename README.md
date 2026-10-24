@@ -8,6 +8,8 @@ GPU-accelerated face blurring for video, built for precut footage. Every frame i
 
 ## Quick start
 
+Download `facebegone.py` from the [latest release](https://github.com/wishym1shy/face-be-gone/releases/latest), then:
+
 ```powershell
 py -3.12 facebegone.py input.mp4 output.mp4 --strength 80 --margin 0.45 --confidence 0.25 --smoothing 0.5 --yolo-size x --imgsz 1280
 ```

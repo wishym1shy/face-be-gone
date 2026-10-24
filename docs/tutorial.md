@@ -82,7 +82,7 @@ This is the step that confirms the install actually worked — it's possible for
 
 ### Step 5 — Get the script and a test clip ready
 
-- Place `facebegone.py` in a working folder (e.g. a folder on your Desktop or in Documents).
+- Download `facebegone.py` from the [latest release](https://github.com/wishym1shy/face-be-gone/releases/latest) and place it in a working folder (e.g. a folder on your Desktop or in Documents). Releases are versions that have been tested on real footage; the newest code on `main` may not be yet.
 - Place a short test video clip (5–15 seconds is plenty for testing) in the same folder.
 - Open a terminal/PowerShell window and navigate to that folder:
   ```powershell
