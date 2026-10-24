@@ -24,10 +24,12 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -285,119 +287,462 @@ def format_elapsed(seconds):
     return f"{s}s"
 
 
+class FaceBeGoneError(Exception):
+    """A problem the user can fix (bad input, missing ffmpeg, wrong container).
+    main() prints the message and exits with status 1."""
+
+
+# Output codecs for --codec. `quality` is the encoder's quality flag (None means
+# the codec is fixed-quality and --crf is ignored); `containers` limits which
+# output extensions the codec can go in (None means any).
+CODECS = {
+    "h264": {
+        "encoder": "libx264", "pix_fmt": "yuv420p", "args": ["-preset", "slow"],
+        "quality": "-crf", "default_crf": 16, "containers": None,
+    },
+    "hevc": {
+        "encoder": "libx265", "pix_fmt": "yuv420p", "args": ["-preset", "slow"],
+        "quality": "-crf", "default_crf": 18, "containers": None,
+    },
+    "h264_nvenc": {
+        "encoder": "h264_nvenc", "pix_fmt": "yuv420p", "args": ["-preset", "p5", "-rc", "vbr", "-b:v", "0"],
+        "quality": "-cq", "default_crf": 19, "containers": None,
+    },
+    "hevc_nvenc": {
+        "encoder": "hevc_nvenc", "pix_fmt": "yuv420p", "args": ["-preset", "p5", "-rc", "vbr", "-b:v", "0"],
+        "quality": "-cq", "default_crf": 21, "containers": None,
+    },
+    "prores": {
+        # ProRes 422 HQ, the usual intermediate for NLE round-trips
+        "encoder": "prores_ks", "pix_fmt": "yuv422p10le", "args": ["-profile:v", "3", "-vendor", "apl0"],
+        "quality": None, "default_crf": None, "containers": (".mov", ".mkv"),
+    },
+    "dnxhr": {
+        "encoder": "dnxhd", "pix_fmt": "yuv422p", "args": ["-profile:v", "dnxhr_hq"],
+        "quality": None, "default_crf": None, "containers": (".mov", ".mkv"),
+    },
+}
+
+# Audio codecs that can be stream-copied into each container without
+# re-encoding. Anything else is re-encoded to AAC. Matroska takes everything.
+_MP4_AUDIO = {"aac", "mp3", "ac3", "eac3", "alac"}
+AUDIO_COPY_OK = {
+    ".mp4": _MP4_AUDIO,
+    ".m4v": _MP4_AUDIO,
+    ".mov": _MP4_AUDIO | {"pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be",
+                          "pcm_s32le", "pcm_s32be", "pcm_f32le", "pcm_f32be"},
+    ".mkv": "any",
+}
+
+# ffprobe color_space -> the matching matrix name for ffmpeg's scale filter
+SCALE_MATRIX = {
+    "bt709": "bt709", "smpte170m": "smpte170m", "bt470bg": "bt470",
+    "bt2020nc": "bt2020", "bt2020c": "bt2020", "smpte240m": "smpte240m", "fcc": "fcc",
+}
+
+
+def _known(value):
+    """ffprobe reports missing color tags as absent, 'unknown' or 'unspecified'."""
+    return value if value and value not in ("unknown", "unspecified", "reserved") else None
+
+
+def probe_video(path):
+    """Read what we need from the source with ffprobe: upright frame size (after
+    rotation), frame rate, frame count estimate, color tags, audio streams and
+    timecode."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", path],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise FaceBeGoneError(f"could not read {path}:\n{result.stderr.strip()}")
+    info = json.loads(result.stdout)
+    streams = info.get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"
+                  and not s.get("disposition", {}).get("attached_pic")), None)
+    if video is None:
+        raise FaceBeGoneError(f"no video stream found in {path}")
+
+    rotation = 0
+    for side_data in video.get("side_data_list", []):
+        if "rotation" in side_data:
+            rotation = int(round(float(side_data["rotation"])))
+    if not rotation and "rotate" in video.get("tags", {}):
+        rotation = int(video["tags"]["rotate"])
+    w, h = int(video["width"]), int(video["height"])
+    if rotation % 180 != 0:
+        w, h = h, w  # ffmpeg auto-rotates on decode, so frames arrive upright
+
+    avg_rate = video.get("avg_frame_rate", "0/0")
+    real_rate = video.get("r_frame_rate", "0/0")
+    rate = avg_rate if _rate_value(avg_rate) > 0 else real_rate
+    if _rate_value(rate) <= 0:
+        rate = "30"
+
+    duration = video.get("duration") or info.get("format", {}).get("duration")
+    if duration:
+        total_frames = int(round(float(duration) * _rate_value(rate)))
+    else:
+        total_frames = int(video.get("nb_frames") or 0)
+
+    pix_fmt = video.get("pix_fmt", "")
+    color_range = _known(video.get("color_range"))
+    if color_range is None and pix_fmt.startswith("yuvj"):
+        color_range = "pc"
+
+    sar = video.get("sample_aspect_ratio", "1:1")
+    if sar in ("1:1", "0:1", "N/A") or ":" not in sar:
+        sar = None
+    elif rotation % 180 != 0:
+        num, den = sar.split(":")
+        sar = f"{den}:{num}"  # pixels are rotated too
+
+    timecode = None
+    for tags in [info.get("format", {}).get("tags", {})] + [s.get("tags", {}) for s in streams]:
+        if tags.get("timecode"):
+            timecode = tags["timecode"]
+            break
+
+    return {
+        "width": w, "height": h, "rotation": rotation,
+        "rate": rate, "fps": _rate_value(rate),
+        "vfr": _rate_value(avg_rate) > 0 and _rate_value(avg_rate) != _rate_value(real_rate),
+        "total_frames": total_frames,
+        "color_range": color_range,
+        "color_space": _known(video.get("color_space")),
+        "color_primaries": _known(video.get("color_primaries")),
+        "color_transfer": _known(video.get("color_transfer")),
+        "audio": [s for s in streams if s.get("codec_type") == "audio"],
+        "timecode": timecode,
+        "sar": sar,
+    }
+
+
+def _rate_value(rate):
+    """'30000/1001' -> 29.97; returns 0 for '0/0' or garbage."""
+    try:
+        num, _, den = str(rate).partition("/")
+        return float(num) / float(den or 1)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _color_conversion(info):
+    """Matrix and range used for both YUV->BGR on decode and BGR->YUV on encode.
+    Using the same pair both ways is what keeps unblurred pixels looking
+    identical to the source; for untagged sources, fall back to the usual
+    convention (BT.709 for HD, BT.601 for SD) and leave the output untagged too."""
+    matrix = SCALE_MATRIX.get(info["color_space"]) or ("bt709" if info["height"] >= 720 else "smpte170m")
+    rng = info["color_range"] or "tv"
+    return matrix, rng
+
+
+def _stderr_tail(f, lines=20):
+    f.seek(0)
+    text = f.read().decode("utf-8", errors="replace").strip().splitlines()
+    return "\n".join(text[-lines:])
+
+
+def available_encoders():
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True)
+    names = set()
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and len(parts[0]) == 6:
+            names.add(parts[1])
+    return names
+
+
+class FfmpegReader:
+    """Decode the source with ffmpeg into upright BGR frames on a pipe.
+
+    Rotation is applied by ffmpeg, color is converted with an explicit matrix
+    (see _color_conversion), and the `fps` filter resamples variable frame rate
+    sources to a constant rate by timestamp, so frame N is always at N / fps
+    seconds and stays in sync with the audio."""
+
+    def __init__(self, path, info):
+        self.w, self.h = info["width"], info["height"]
+        self.frame_bytes = self.w * self.h * 3
+        matrix, rng = _color_conversion(info)
+        vf = f"fps={info['rate']},scale=in_color_matrix={matrix}:in_range={rng},format=bgr24"
+        cmd = ["ffmpeg", "-v", "error", "-nostdin", "-i", path, "-map", "0:v:0",
+               "-an", "-sn", "-dn", "-vf", vf, "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
+        self.stderr = tempfile.TemporaryFile()
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=self.stderr)
+
+    def read(self):
+        data = self.proc.stdout.read(self.frame_bytes)
+        if len(data) < self.frame_bytes:
+            return None
+        return np.frombuffer(data, dtype=np.uint8).reshape((self.h, self.w, 3)).copy()
+
+    def close(self):
+        self.proc.stdout.close()
+        returncode = self.proc.wait()
+        if returncode != 0:
+            raise FaceBeGoneError(f"ffmpeg failed while decoding the input:\n{_stderr_tail(self.stderr)}")
+
+    def abort(self):
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
+
+
+class FfmpegWriter:
+    """Encode BGR frames from a pipe straight into the final file, muxing the
+    source's audio, metadata and timecode in the same ffmpeg command."""
+
+    def __init__(self, out_path, in_path, info, codec="h264", crf=None):
+        spec = CODECS[codec]
+        ext = os.path.splitext(out_path)[1].lower()
+        matrix, rng = _color_conversion(info)
+
+        vf = []
+        if info["width"] % 2 or info["height"] % 2:
+            vf.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")  # 4:2:0 / 4:2:2 need even dimensions
+        vf.append(f"scale=out_color_matrix={matrix}:out_range={rng},format={spec['pix_fmt']}")
+        if info["sar"]:
+            vf.append(f"setsar={info['sar'].replace(':', '/')}")  # anamorphic sources keep their display shape
+
+        cmd = ["ffmpeg", "-y", "-v", "error", "-nostdin",
+               "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{info['width']}x{info['height']}",
+               "-r", info["rate"], "-i", "-",
+               "-i", in_path,
+               "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "1",
+               "-vf", ",".join(vf),
+               "-c:v", spec["encoder"], *spec["args"]]
+        if spec["quality"]:
+            cmd += [spec["quality"], str(crf if crf is not None else spec["default_crf"])]
+        if codec in ("hevc", "hevc_nvenc") and ext in (".mp4", ".m4v", ".mov"):
+            cmd += ["-tag:v", "hvc1"]  # lets QuickTime and Apple devices play HEVC
+        for flag, key in (("-color_range", "color_range"), ("-color_primaries", "color_primaries"),
+                          ("-color_trc", "color_transfer"), ("-colorspace", "color_space")):
+            if info[key]:
+                cmd += [flag, info[key]]
+        if info["timecode"] and ext in (".mov", ".mp4", ".m4v"):
+            cmd += ["-timecode", info["timecode"]]
+
+        self.audio_summary = []
+        copy_ok = AUDIO_COPY_OK.get(ext, set())
+        for i, stream in enumerate(info["audio"]):
+            name = stream.get("codec_name", "?")
+            if copy_ok == "any" or name in copy_ok:
+                cmd += [f"-c:a:{i}", "copy"]
+                self.audio_summary.append(f"{name} (copied)")
+            else:
+                cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", "320k"]
+                self.audio_summary.append(f"{name} -> aac (can't be copied into {ext or 'this container'})")
+
+        cmd.append(out_path)
+        self.out_path = out_path
+        self.encoder = spec["encoder"]
+        self.stderr = tempfile.TemporaryFile()
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=self.stderr)
+
+    def write(self, frame):
+        try:
+            self.proc.stdin.write(frame.tobytes())
+        except (BrokenPipeError, OSError):
+            self.proc.wait()
+            hint = ""
+            if "nvenc" in self.encoder:
+                hint = "\nNVENC needs an NVIDIA GPU with a current driver; use --codec h264 or hevc otherwise."
+            raise FaceBeGoneError(
+                f"ffmpeg stopped while encoding {self.out_path}:\n{_stderr_tail(self.stderr)}{hint}")
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        returncode = self.proc.wait()
+        if returncode != 0:
+            raise FaceBeGoneError(f"ffmpeg failed while encoding {self.out_path}:\n{_stderr_tail(self.stderr)}")
+
+    def abort(self):
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
+        _remove_partial(self.out_path)
+
+
+class OpenCVReader:
+    """Fallback decoder used only with --allow-no-audio when ffmpeg is missing."""
+
+    def __init__(self, path):
+        self.cap = cv2.VideoCapture(path)
+        if not self.cap.isOpened():
+            raise FaceBeGoneError(f"could not open {path}")
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
+        self.w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    def read(self):
+        ok, frame = self.cap.read()
+        return frame if ok else None
+
+    def close(self):
+        self.cap.release()
+
+    abort = close
+
+
+class OpenCVWriter:
+    """Fallback encoder (mp4v, no audio) used only with --allow-no-audio."""
+
+    def __init__(self, out_path, fps, w, h):
+        self.out_path = out_path
+        self.writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+
+    def write(self, frame):
+        self.writer.write(frame)
+
+    def close(self):
+        self.writer.release()
+
+    def abort(self):
+        self.writer.release()
+        _remove_partial(self.out_path)
+
+
+def _remove_partial(path):
+    """Delete an unfinished output so a truncated render can't be mistaken for a finished one."""
+    try:
+        os.remove(path)
+        print(f"Removed incomplete output: {path}", file=sys.stderr)
+    except OSError:
+        pass
+
+
+def check_ffmpeg(codec, out_path):
+    """Fail fast, before any model loading or detection, on problems that would
+    otherwise only show up after minutes of processing."""
+    for tool in ("ffmpeg", "ffprobe"):
+        if shutil.which(tool) is None:
+            return f"{tool} not found on PATH"
+    spec = CODECS[codec]
+    ext = os.path.splitext(out_path)[1].lower()
+    if spec["containers"] and ext not in spec["containers"]:
+        raise FaceBeGoneError(
+            f"--codec {codec} needs a {' or '.join(spec['containers'])} output file, not '{ext or out_path}'.")
+    if spec["encoder"] not in available_encoders():
+        raise FaceBeGoneError(
+            f"your ffmpeg build has no '{spec['encoder']}' encoder (needed for --codec {codec}). "
+            "Install a full ffmpeg build or pick another --codec.")
+    return None
+
+
 def process_video(in_path, out_path, strength=35, confidence=0.5, pixelate=False,
                    margin=0.25, smoothing=0.5, model_variant="full", backend="yolo",
-                   yolo_size="m", device=None, imgsz=640, shape="rect"):
+                   yolo_size="m", device=None, imgsz=640, shape="rect",
+                   codec="h264", crf=None, allow_no_audio=False):
     start_time = time.time()
     print(f"face-be-gone {__version__}", file=sys.stderr)
 
-    cap = cv2.VideoCapture(in_path)
-    if not cap.isOpened():
-        print(f"ERROR: could not open {in_path}", file=sys.stderr)
-        sys.exit(1)
+    if not os.path.exists(in_path):
+        raise FaceBeGoneError(f"could not open {in_path}")
+    if os.path.abspath(in_path) == os.path.abspath(out_path):
+        raise FaceBeGoneError("output path is the same as the input; pick a different output file name.")
+    if crf is not None and CODECS[codec]["quality"] is None:
+        print(f"Note: --crf is ignored for --codec {codec} (fixed-quality codec).", file=sys.stderr)
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    ffmpeg_problem = check_ffmpeg(codec, out_path)
+    if ffmpeg_problem and not allow_no_audio:
+        raise FaceBeGoneError(
+            f"{ffmpeg_problem}. ffmpeg is needed to encode the output and keep the audio.\n"
+            "Install ffmpeg (https://ffmpeg.org/download.html) and make sure ffmpeg and ffprobe are on PATH.\n"
+            "To render anyway with no audio and lower quality, re-run with --allow-no-audio.")
 
-    # Write to a temp silent video, then mux original audio back in with ffmpeg.
-    tmp_video = out_path + ".noaudio.mp4"
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(tmp_video, fourcc, fps, (w, h))
+    if ffmpeg_problem:
+        print("=" * 72, file=sys.stderr)
+        print(f"WARNING: {ffmpeg_problem}. Rendering with OpenCV because of --allow-no-audio:", file=sys.stderr)
+        print("  the output will have NO AUDIO and lower quality (mp4v codec).", file=sys.stderr)
+        print("=" * 72, file=sys.stderr)
+        reader = OpenCVReader(in_path)
+        w, h, fps, total_frames = reader.w, reader.h, reader.fps, reader.total_frames
+    else:
+        info = probe_video(in_path)
+        w, h, total_frames = info["width"], info["height"], info["total_frames"]
+        if info["vfr"]:
+            print(f"Variable frame rate source: output will be a constant {info['fps']:.3f} fps "
+                  "to keep audio in sync.", file=sys.stderr)
 
     detector = make_detector(confidence, backend=backend, model_variant=model_variant,
                               yolo_size=yolo_size, device=device)
+
+    if ffmpeg_problem:
+        writer = OpenCVWriter(out_path, fps, w, h)
+    else:
+        reader = FfmpegReader(in_path, info)
+        writer = FfmpegWriter(out_path, in_path, info, codec=codec, crf=crf)
+        spec = CODECS[codec]
+        quality = f", {spec['quality'].lstrip('-').upper()} {crf if crf is not None else spec['default_crf']}" \
+            if spec["quality"] else ""
+        print(f"Encoding: {codec} ({spec['encoder']}{quality}), {w}x{h} @ {info['fps']:.3f} fps", file=sys.stderr)
+        print(f"Audio: {', '.join(writer.audio_summary) or 'none in source'}", file=sys.stderr)
 
     tracks = {}          # key -> SmoothedBox
     next_key = 0
     max_match_dist = max(w, h) * 0.08  # how far a face can move between frames and still match
 
     frame_idx = 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        frame_idx += 1
+    try:
+        while True:
+            frame = reader.read()
+            if frame is None:
+                break
+            frame_idx += 1
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        detections = detect_faces(detector, rgb, frame, w, h, confidence=confidence, imgsz=imgsz)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            detections = detect_faces(detector, rgb, frame, w, h, confidence=confidence, imgsz=imgsz)
 
-        raw_boxes = []
-        for (x, y, x1_raw, y1_raw) in detections:
-            bw = x1_raw - x
-            bh = y1_raw - y
-            x0, y0, x1, y1 = expand_box(x, y, bw, bh, w, h, margin=margin)
-            raw_boxes.append((x0, y0, x1, y1))
+            raw_boxes = []
+            for (x, y, x1_raw, y1_raw) in detections:
+                bw = x1_raw - x
+                bh = y1_raw - y
+                x0, y0, x1, y1 = expand_box(x, y, bw, bh, w, h, margin=margin)
+                raw_boxes.append((x0, y0, x1, y1))
 
-        assignments = match_detections_to_tracks(raw_boxes, tracks, max_match_dist)
+            assignments = match_detections_to_tracks(raw_boxes, tracks, max_match_dist)
 
-        active_keys = set()
-        for i, box in enumerate(raw_boxes):
-            key = assignments[i]
-            if key is None:
-                key = next_key
-                next_key += 1
-                tracks[key] = SmoothedBox(alpha=smoothing)
-            sx0, sy0, sx1, sy1 = tracks[key].update(*box)
-            blur_region(frame, sx0, sy0, sx1, sy1, strength, pixelate=pixelate, shape=shape)
-            active_keys.add(key)
+            active_keys = set()
+            for i, box in enumerate(raw_boxes):
+                key = assignments[i]
+                if key is None:
+                    key = next_key
+                    next_key += 1
+                    tracks[key] = SmoothedBox(alpha=smoothing)
+                sx0, sy0, sx1, sy1 = tracks[key].update(*box)
+                blur_region(frame, sx0, sy0, sx1, sy1, strength, pixelate=pixelate, shape=shape)
+                active_keys.add(key)
 
-        # drop tracks that weren't seen this frame (face left / cut happened)
-        for key in list(tracks.keys()):
-            if key not in active_keys:
-                del tracks[key]
+            # drop tracks that weren't seen this frame (face left / cut happened)
+            for key in list(tracks.keys()):
+                if key not in active_keys:
+                    del tracks[key]
 
-        writer.write(frame)
+            writer.write(frame)
 
-        if frame_idx % 100 == 0 or frame_idx == total_frames:
-            pct = (frame_idx / total_frames * 100) if total_frames else 0
-            elapsed = format_elapsed(time.time() - start_time)
-            print(f"  {frame_idx}/{total_frames} frames ({pct:.1f}%) -- {elapsed} elapsed", file=sys.stderr)
+            if frame_idx % 100 == 0 or frame_idx == total_frames:
+                pct = (frame_idx / total_frames * 100) if total_frames else 0
+                elapsed = format_elapsed(time.time() - start_time)
+                print(f"  {frame_idx}/{total_frames} frames ({pct:.1f}%) -- {elapsed} elapsed", file=sys.stderr)
 
-    cap.release()
-    writer.release()
-    if detector[0] == "mediapipe":
-        detector[1].close()
+        reader.close()
+        if frame_idx == 0:
+            raise FaceBeGoneError(f"no frames could be read from {in_path}")
+        writer.close()
+    except BaseException:
+        reader.abort()
+        writer.abort()
+        raise
+    finally:
+        if detector[0] == "mediapipe":
+            detector[1].close()
 
-    # Mux original audio back onto the processed (silent) video.
-    if shutil.which("ffmpeg") is None:
-        print("WARNING: ffmpeg not found on PATH. Output will have no audio.", file=sys.stderr)
-        print("Install ffmpeg (e.g. https://ffmpeg.org/download.html) and ensure", file=sys.stderr)
-        print("it's on PATH, then re-run to get audio in the output.", file=sys.stderr)
-        shutil.copyfile(tmp_video, out_path)
-        try:
-            os.remove(tmp_video)
-        except OSError:
-            pass
-        print(f"Done (no audio): {out_path}")
-        print(f"Total time: {format_elapsed(time.time() - start_time)}")
-        return
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", tmp_video,
-        "-i", in_path,
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-map", "0:v:0",
-        "-map", "1:a:0?",
-        "-shortest",
-        out_path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print("ffmpeg mux failed, output has no audio. stderr:", file=sys.stderr)
-        print(result.stderr, file=sys.stderr)
-        # fall back: at least deliver the silent video under the requested name
-        shutil.copyfile(tmp_video, out_path)
-    else:
-        try:
-            os.remove(tmp_video)
-        except OSError:
-            pass  # not critical if cleanup fails; output is already written
-
-    print(f"Done: {out_path}")
+    print(f"Done{' (no audio)' if ffmpeg_problem else ''}: {out_path}")
     print(f"Total time: {format_elapsed(time.time() - start_time)}")
 
 
@@ -439,22 +784,42 @@ def main():
                               "frame to this before detecting, regardless of source resolution -- "
                               "raising it (e.g. 960, 1280) helps catch small/distant faces at the cost "
                               "of slower inference and more VRAM. Only affects --backend yolo.")
+    parser.add_argument("--codec", default="h264", choices=list(CODECS),
+                         help="output video codec (default h264). h264/hevc: high-quality software "
+                              "encode; h264_nvenc/hevc_nvenc: fast NVIDIA GPU encode; prores: ProRes 422 HQ "
+                              "and dnxhr: DNxHR HQ, both for NLE round-trips (need a .mov or .mkv output)")
+    parser.add_argument("--crf", type=int, default=None,
+                         help="output quality, lower = better and bigger (defaults: h264 16, hevc 18, "
+                              "h264_nvenc 19, hevc_nvenc 21). Ignored for prores and dnxhr.")
+    parser.add_argument("--allow-no-audio", action="store_true",
+                         help="if ffmpeg is missing, render anyway with OpenCV instead of stopping: "
+                              "no audio and lower quality (mp4v)")
     args = parser.parse_args()
 
-    process_video(
-        args.input, args.output,
-        strength=args.strength,
-        confidence=args.confidence,
-        pixelate=args.pixelate,
-        margin=args.margin,
-        smoothing=args.smoothing,
-        model_variant=args.model,
-        backend=args.backend,
-        yolo_size=args.yolo_size,
-        device=args.device,
-        imgsz=args.imgsz,
-        shape=args.shape,
-    )
+    try:
+        process_video(
+            args.input, args.output,
+            strength=args.strength,
+            confidence=args.confidence,
+            pixelate=args.pixelate,
+            margin=args.margin,
+            smoothing=args.smoothing,
+            model_variant=args.model,
+            backend=args.backend,
+            yolo_size=args.yolo_size,
+            device=args.device,
+            imgsz=args.imgsz,
+            shape=args.shape,
+            codec=args.codec,
+            crf=args.crf,
+            allow_no_audio=args.allow_no_audio,
+        )
+    except FaceBeGoneError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nCancelled.", file=sys.stderr)
+        sys.exit(130)
 
 
 if __name__ == "__main__":

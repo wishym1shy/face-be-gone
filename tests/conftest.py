@@ -85,3 +85,26 @@ def vfr_clip(media):
            "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]", "-map", "2:a",
            "-fps_mode", "vfr", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", path)
     return path
+
+
+@pytest.fixture(scope="session")
+def timecode_clip(media, clip):
+    path = media / "timecode.mov"
+    ffmpeg("-i", clip, "-c", "copy", "-timecode", "01:00:00:00", path)
+    return path
+
+
+@pytest.fixture(scope="session")
+def anamorphic_clip(media, clip):
+    """720x480 with non-square pixels (SAR 32:27), displayed as 16:9."""
+    path = media / "anamorphic.mp4"
+    ffmpeg("-i", clip, "-vf", "scale=720:480,setsar=32/27", "-c:v", "libx264", "-c:a", "copy", path)
+    return path
+
+
+@pytest.fixture(scope="session")
+def odd_size_clip(media, clip):
+    """321x241, stored as 4:4:4 because 4:2:0 can't have odd dimensions."""
+    path = media / "odd_size.mp4"
+    ffmpeg("-i", clip, "-vf", "scale=321:241,format=yuv444p", "-c:v", "libx264", "-c:a", "copy", path)
+    return path
