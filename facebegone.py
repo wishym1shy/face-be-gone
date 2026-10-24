@@ -5,7 +5,7 @@ facebegone.py
 ================================================================================
   Script by:      wishym1shy (GitHub)
   Coded with:     Claude Code
-  Version:        1.1.0 (keep in sync with __version__ and CHANGELOG.md)
+  Version:        1.2.0 (keep in sync with __version__ and CHANGELOG.md)
   License:        MIT (see LICENSE). Free to use, modify and share,
                   commercially or not; keep the copyright notice.
                   Dependencies keep their own licenses: ultralytics is
@@ -36,7 +36,7 @@ import urllib.request
 import cv2
 import numpy as np
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 MODEL_URLS = {
     "short": "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
