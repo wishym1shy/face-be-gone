@@ -12,7 +12,7 @@ import pytest
 
 from helpers import (
     audio_streams, beep_times, env_without_ffmpeg, flash_times, frame_count,
-    psnr, rotation, run_script, video_stream,
+    opencv_read_info, psnr, rotation, run_script, video_stream,
 )
 
 ISSUE_5 = "output pipeline bug, tracked in #5"
@@ -36,7 +36,7 @@ def test_haar_end_to_end(clip, tmp_path):
     ok(run_script(clip, out, "--backend", "haar"))
     src, dst = video_stream(clip), video_stream(out)
     assert (dst["width"], dst["height"]) == (src["width"], src["height"])
-    assert frame_count(out) == frame_count(clip)
+    assert frame_count(out) == frame_count(clip), f"source: {opencv_read_info(clip)}"
     assert len(audio_streams(out)) == 1
 
 
@@ -63,7 +63,7 @@ def test_blur_lands_in_the_detected_box(clip, tmp_path):
 def test_keeps_every_frame_when_audio_ends_early(short_audio_clip, tmp_path):
     out = tmp_path / "out.mp4"
     ok(run_script(short_audio_clip, out, stub="none"))
-    assert frame_count(out) == frame_count(short_audio_clip)
+    assert frame_count(out) == frame_count(short_audio_clip), f"source: {opencv_read_info(short_audio_clip)}"
 
 
 def test_rotated_footage_comes_out_upright(rotated_clip, rotated_reference, tmp_path):

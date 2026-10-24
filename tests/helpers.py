@@ -71,6 +71,19 @@ def frame_count(path):
     return int(out.strip())
 
 
+def opencv_read_info(path):
+    """Which OpenCV backend opens `path`, and how many frames it reads.
+    Used in failure messages, since OpenCV picks different backends per OS."""
+    import cv2
+    cap = cv2.VideoCapture(str(path))
+    backend = cap.getBackendName() if cap.isOpened() else "none"
+    count = 0
+    while cap.read()[0]:
+        count += 1
+    cap.release()
+    return f"OpenCV {cv2.__version__} via {backend} reads {count} frames"
+
+
 def psnr(reference, distorted):
     """Average PSNR in dB of `distorted` against `reference`, frame by frame."""
     err = subprocess.run(
