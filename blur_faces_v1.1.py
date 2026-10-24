@@ -30,7 +30,6 @@ import subprocess
 import sys
 import time
 import urllib.request
-from collections import deque
 
 import cv2
 import numpy as np
